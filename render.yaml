@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: sharehut-backend
+    env: node
+    plan: free
+    branch: main
+    rootDir: backend/sharehut
+    buildCommand: npm install
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
