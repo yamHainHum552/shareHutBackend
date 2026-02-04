@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { v4 as uuid } from "uuid";
+import passport from "passport";
 
 import { findUserByEmail, createUser, findUserById } from "./auth.service.js";
 import { env } from "../../config/env.js";
@@ -9,16 +9,59 @@ import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
 
+/**
+ * =========================
+ * GOOGLE OAUTH START
+ * =========================
+ */
+router.get(
+  "/google",
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+    session: false,
+  }),
+);
+
+/**
+ * =========================
+ * GOOGLE OAUTH CALLBACK
+ * =========================
+ */
+router.get(
+  "/google/callback",
+  passport.authenticate("google", {
+    session: false,
+    failureRedirect: `${env.FRONTEND_URL}/login?error=google_auth_failed`,
+  }),
+  (req, res) => {
+    const user = req.user;
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+      },
+      env.JWT_SECRET,
+      { expiresIn: "7d" },
+    );
+
+    res.redirect(`${env.FRONTEND_URL}/oauth-success?token=${token}`);
+  },
+);
+
+/**
+ * =========================
+ * REGISTER (LOCAL)
+ * =========================
+ */
 router.post("/register", async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
-    // 1️⃣ Basic validation
     if (!name || !email || !password) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
-    // 2️⃣ Check if user already exists
     const existingUser = await findUserByEmail(email);
     if (existingUser) {
       return res
@@ -26,17 +69,19 @@ router.post("/register", async (req, res) => {
         .json({ error: "User already exists with this email" });
     }
 
-    // 3️⃣ Hash password
-    const hash = await bcrypt.hash(password, 10);
+    await createUser({
+      name,
+      email,
+      password,
+      provider: "local",
+    });
 
-    // 4️⃣ Create user
-    await createUser(uuid(), name, email, hash);
-
-    return res.status(201).json({ message: "User registered successfully" });
+    return res.status(201).json({
+      message: "User registered successfully",
+    });
   } catch (error) {
     console.error("Register error:", error);
 
-    // 5️⃣ Handle DB unique constraint edge case
     if (error.code === "23505") {
       return res
         .status(409)
@@ -47,21 +92,43 @@ router.post("/register", async (req, res) => {
   }
 });
 
+/**
+ * =========================
+ * LOGIN (LOCAL)
+ * =========================
+ */
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   const user = await findUserByEmail(email);
-  if (!user)
+  if (!user) {
     return res.status(401).json({ error: "Invalid email or password" });
+  }
+
+  // 🔒 Block Google-only accounts
+  if (user.provider === "google") {
+    return res.status(400).json({
+      error: "This account uses Google sign-in",
+    });
+  }
 
   const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid)
+  if (!valid) {
     return res.status(401).json({ error: "Invalid email or password" });
+  }
 
-  const token = jwt.sign({ id: user.id }, env.JWT_SECRET);
+  const token = jwt.sign({ id: user.id, email: user.email }, env.JWT_SECRET, {
+    expiresIn: "7d",
+  });
+
   res.json({ token });
 });
 
+/**
+ * =========================
+ * CURRENT USER
+ * =========================
+ */
 router.get("/me", authMiddleware, async (req, res) => {
   const user = await findUserById(req.user.id);
 

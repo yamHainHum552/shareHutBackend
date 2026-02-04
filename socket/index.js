@@ -41,8 +41,6 @@ export const initSocket = (io) => {
   });
 
   io.on("connection", (socket) => {
-    console.log("Socket connected:", socket.id);
-
     /**
      * 🚪 JOIN ROOM
      */
