@@ -49,14 +49,14 @@ export const isRoomOwner = async (roomId, userId) => {
 /**
  * Add a user to a room (idempotent & race-safe)
  */
-export const addRoomMember = async (roomId, userId) => {
+export const addRoomMember = async (roomId, userId, role = "member") => {
   await pool.query(
     `
-    INSERT INTO room_members (room_id, user_id)
-    VALUES ($1, $2)
+    INSERT INTO room_members (room_id, user_id, role)
+    VALUES ($1, $2, $3)
     ON CONFLICT (room_id, user_id) DO NOTHING
     `,
-    [roomId, userId],
+    [roomId, userId, role],
   );
 };
 
