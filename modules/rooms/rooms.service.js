@@ -1,27 +1,58 @@
 import { pool } from "../../config/db.js";
+import { env } from "../../config/env.js";
 
-/**
- * Create a room and add owner as member
- */
 export const createRoom = async (id, name, ownerId, roomCode, isPrivate) => {
-  // Create room
-  await pool.query(
-    `
-    INSERT INTO rooms (id, name, owner_id, room_code, is_private)
-    VALUES ($1, $2, $3, $4, $5)
-    `,
-    [id, name, ownerId, roomCode, isPrivate],
-  );
+  const client = await pool.connect();
 
-  // Add owner as member (idempotent)
-  await pool.query(
-    `
-    INSERT INTO room_members (room_id, user_id, role)
-    VALUES ($1, $2, 'owner')
-    ON CONFLICT (room_id, user_id) DO NOTHING
-    `,
-    [id, ownerId],
-  );
+  try {
+    await client.query("BEGIN");
+
+    // 🔒 Lock existing rooms owned by this user
+    const { rowCount } = await client.query(
+      `
+      SELECT 1
+      FROM rooms
+      WHERE owner_id = $1
+      FOR UPDATE
+      `,
+      [ownerId],
+    );
+
+    if (rowCount >= env.MAX_ROOMS_PER_USER) {
+      throw new Error("ROOM_LIMIT_REACHED");
+    }
+
+    // Create room
+    await client.query(
+      `
+      INSERT INTO rooms (id, name, owner_id, room_code, is_private)
+      VALUES ($1, $2, $3, $4, $5)
+      `,
+      [id, name, ownerId, roomCode, isPrivate],
+    );
+
+    // Add owner as member
+    await client.query(
+      `
+      INSERT INTO room_members (room_id, user_id, role)
+      VALUES ($1, $2, 'owner')
+      ON CONFLICT (room_id, user_id) DO NOTHING
+      `,
+      [id, ownerId],
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+
+    if (err.message === "ROOM_LIMIT_REACHED") {
+      throw err;
+    }
+
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 /**
@@ -59,6 +90,17 @@ export const addRoomMember = async (roomId, userId, role = "member") => {
     [roomId, userId, role],
   );
 };
+export const findRoomSettings = async (roomId) => {
+  const { rows } = await pool.query(
+    `
+    SELECT owner_id, is_read_only, allow_joins
+    FROM rooms
+    WHERE id = $1
+    `,
+    [roomId],
+  );
+  return rows[0] || null;
+};
 
 /**
  * Check if user is a room member
@@ -80,6 +122,19 @@ export const findRoomByCode = async (roomCode) => {
     [roomCode],
   );
   return rows[0] || null;
+};
+
+export const updateRoomSettings = async (roomId, isReadOnly, allowJoins) => {
+  await pool.query(
+    `
+    UPDATE rooms
+    SET
+      is_read_only = COALESCE($2, is_read_only),
+      allow_joins  = COALESCE($3, allow_joins)
+    WHERE id = $1
+    `,
+    [roomId, isReadOnly, allowJoins],
+  );
 };
 
 /**

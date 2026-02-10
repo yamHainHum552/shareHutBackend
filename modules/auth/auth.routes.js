@@ -49,11 +49,6 @@ router.get(
   },
 );
 
-/**
- * =========================
- * REGISTER (LOCAL)
- * =========================
- */
 router.post("/register", async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -87,22 +82,16 @@ router.post("/register", async (req, res) => {
         .status(409)
         .json({ error: "User already exists with this email" });
     }
-
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-/**
- * =========================
- * LOGIN (LOCAL)
- * =========================
- */
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   const user = await findUserByEmail(email);
   if (!user) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid Credentials" });
   }
 
   // 🔒 Block Google-only accounts
@@ -114,7 +103,7 @@ router.post("/login", async (req, res) => {
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
-    return res.status(401).json({ error: "Invalid email or password" });
+    return res.status(401).json({ error: "Invalid Credentials" });
   }
 
   const token = jwt.sign({ id: user.id, email: user.email }, env.JWT_SECRET, {
