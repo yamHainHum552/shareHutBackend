@@ -1,19 +1,11 @@
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 
-/**
- * Optional authentication middleware
- *
- * - If Authorization header is present → validate JWT
- * - If valid → attach req.user
- * - If missing → continue as guest
- * - If invalid → reject
- */
 export const authMiddlewareOptional = (req, res, next) => {
   const token = req.cookies?.token;
 
   if (!token) {
-    return next(); // guest access allowed
+    return next();
   }
 
   try {
