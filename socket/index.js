@@ -37,6 +37,14 @@ const guestTextUsage = new Map();
 /*                               Helper Methods                               */
 /* -------------------------------------------------------------------------- */
 
+const getUserKey = (socket) => {
+  if (socket.user.type === "user") {
+    return socket.user.id;
+  }
+
+  return `guest:${socket.user.id}:${socket.id}`;
+};
+
 const getUserInfo = async (userId) => {
   const { rows } = await pool.query(
     "SELECT id, name FROM users WHERE id = $1",
@@ -49,7 +57,10 @@ const emitUserList = (roomId) => {
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return;
 
-  const users = Array.from(usersMap.values()).map((entry) => entry.userData);
+  const users = Array.from(usersMap.values())
+    .map((entry) => entry.userData)
+    .filter((u) => u && u.id && u.name);
+
   io.to(roomId).emit("user-list", users);
 };
 
@@ -80,8 +91,7 @@ const removeSocketFromRoom = (socket) => {
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return;
 
-  const userKey =
-    socket.user.type === "user" ? socket.user.id : `guest:${socket.user.id}`;
+  const userKey = getUserKey(socket);
 
   const entry = usersMap.get(userKey);
   if (!entry) return;
@@ -133,6 +143,8 @@ export const initSocket = (serverIo) => {
       if (guestOwnerToken) {
         socket.user = {
           type: "guest-owner",
+          id: guestOwnerToken, // ✅ give stable id
+          name: "Guest Owner", // ✅ define name
           guestOwnerToken,
         };
         return next();
@@ -225,10 +237,7 @@ export const initSocket = (serverIo) => {
 
       const usersMap = roomUsers.get(roomId);
 
-      const userKey =
-        socket.user.type === "user"
-          ? socket.user.id
-          : `guest:${socket.user.id}`;
+      const userKey = getUserKey(socket);
 
       if (!usersMap.has(userKey)) {
         let userData;
@@ -238,9 +247,8 @@ export const initSocket = (serverIo) => {
         } else {
           userData = {
             id: userKey,
-            name:
-              socket.user.type === "guest" ? socket.user.name : "Guest Owner",
-            type: socket.user.type,
+            name: socket.user.name,
+            type: socket.user.type, // ✅ preserve actual type
           };
         }
 
