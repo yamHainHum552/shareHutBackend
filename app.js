@@ -10,11 +10,12 @@ import { env } from "./config/env.js";
 // import { apiLimiter, authLimiter } from "./middleware/rateLimit.middleware.js";
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(cookieParser());
 
 app.use(
   cors({
-    origin: env.FRONTEND_URL,
+    origin: true,
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE"],
     allowedHeaders: [
