@@ -10,6 +10,8 @@ import { env } from "./config/env.js";
 // import { apiLimiter, authLimiter } from "./middleware/rateLimit.middleware.js";
 
 const app = express();
+app.set("trust proxy", 1);
+
 app.use(cookieParser());
 
 app.use(
@@ -34,5 +36,15 @@ app.use(express.json({ limit: "20kb" })); // Payload protection
 app.use("/api/auth", authRoutes);
 app.use("/api/rooms", roomRoutes);
 app.use("/api/requests", requestRoutes);
+
+console.log(
+  env.DATABASE_URL,
+  env.FRONTEND_URL,
+  env.GOOGLE_CLIENT_ID,
+  env.GOOGLE_CLIENT_SECRET,
+  env.JWT_SECRET,
+  env.MAX_ROOMS_PER_USER,
+  env.PORT,
+);
 
 export default app;
