@@ -9,11 +9,6 @@ import { authMiddleware } from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-/**
- * =========================
- * GOOGLE OAUTH START
- * =========================
- */
 router.get(
   "/google",
   passport.authenticate("google", {
@@ -22,11 +17,6 @@ router.get(
   }),
 );
 
-/**
- * =========================
- * GOOGLE OAUTH CALLBACK
- * =========================
- */
 router.get(
   "/google/callback",
   passport.authenticate("google", {
@@ -45,7 +35,14 @@ router.get(
       { expiresIn: "7d" },
     );
 
-    res.redirect(`${env.FRONTEND_URL}/oauth-success?token=${token}`);
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.redirect(`${env.FRONTEND_URL}/dashboard`);
   },
 );
 
@@ -86,6 +83,11 @@ router.post("/register", async (req, res) => {
   }
 });
 
+router.post("/logout", (req, res) => {
+  res.clearCookie("token", { path: "/" });
+  res.json({ success: true });
+});
+
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -94,7 +96,6 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid Credentials" });
   }
 
-  // 🔒 Block Google-only accounts
   if (user.provider === "google") {
     return res.status(400).json({
       error: "This account uses Google sign-in",
@@ -110,14 +111,16 @@ router.post("/login", async (req, res) => {
     expiresIn: "7d",
   });
 
-  res.json({ token });
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+
+  res.json({ success: true });
 });
 
-/**
- * =========================
- * CURRENT USER
- * =========================
- */
 router.get("/me", authMiddleware, async (req, res) => {
   const user = await findUserById(req.user.id);
 

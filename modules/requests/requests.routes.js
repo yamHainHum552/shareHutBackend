@@ -9,6 +9,7 @@ import {
 } from "./requests.service.js";
 import { isRoomOwner, addRoomMember } from "../rooms/rooms.service.js";
 import { pool } from "../../config/db.js";
+import { io } from "../../socket/index.js"; // ✅ ADD THIS
 
 const router = express.Router();
 
@@ -16,7 +17,19 @@ const router = express.Router();
  * User requests to join room
  */
 router.post("/:roomId", authMiddleware, async (req, res) => {
-  await createJoinRequest(uuid(), req.params.roomId, req.user.id);
+  const requestId = uuid();
+  const roomId = req.params.roomId;
+
+  await createJoinRequest(requestId, roomId, req.user.id);
+
+  // 🔔 NOTIFY ROOM OWNER (AND ANY OWNER SOCKETS)
+  if (io) {
+    io.to(roomId).emit("join-request-created", {
+      roomId,
+      requestId,
+    });
+  }
+
   res.json({ message: "Join request sent" });
 });
 
@@ -46,7 +59,6 @@ router.post("/approve/:requestId", authMiddleware, async (req, res) => {
       return res.status(404).json({ error: "Request not found" });
     }
 
-    // 🔒 Prevent double approval
     if (request.status !== "pending") {
       await client.query("ROLLBACK");
       return res.json({ message: "Request already processed" });
@@ -61,6 +73,13 @@ router.post("/approve/:requestId", authMiddleware, async (req, res) => {
     if (req.body.approve) {
       await addRoomMember(request.room_id, request.user_id, "member");
       await updateRequestStatus(request.id, "approved", client);
+
+      // 🔔 OPTIONAL: notify requester
+      if (io) {
+        io.to(request.room_id).emit("join-request-approved", {
+          userId: request.user_id,
+        });
+      }
     } else {
       await updateRequestStatus(request.id, "rejected", client);
     }

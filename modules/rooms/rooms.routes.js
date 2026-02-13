@@ -1,110 +1,279 @@
 import express from "express";
 import { v4 as uuid } from "uuid";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
+import { requireRoomOwner } from "../../middleware/roomOwner.middleware.js";
 import {
   createRoom,
+  createGuestRoom,
   updateRoomSettings,
   findRoomByCode,
+  findRoomsByOwner,
+  isRoomMember,
+  findRoomById,
 } from "./rooms.service.js";
 import { generateRoomCode } from "../../utils/roomCode.js";
-import { findRoomsByOwner } from "./rooms.service.js";
-import { isRoomMember, isRoomOwner, findRoomById } from "./rooms.service.js";
-
+import { addRoomMember } from "./rooms.service.js";
+import { authMiddlewareOptional } from "../../middleware/authMiddlewareOptional.js";
+import { createJoinRequest } from "../requests/requests.service.js";
+import { updateRoomSettingsCache } from "../../socket/index.js";
+import { hashGuestToken } from "../../utils/guestToken.js";
+import { pool } from "../../config/db.js";
+import { generateGuestOwnerToken } from "../../utils/guestToken.js";
 const router = express.Router();
 
 /**
- * Create room
+ * GUEST ROOM
  */
+router.post("/guest", async (req, res) => {
+  const { name, guestOwnerToken } = req.body;
+
+  if (!name || name.length > 100) {
+    return res.status(400).json({ error: "Invalid room name" });
+  }
+
+  try {
+    let ownerToken = guestOwnerToken;
+    let ownerHash;
+
+    if (ownerToken) {
+      ownerHash = hashGuestToken(ownerToken);
+
+      const { rows } = await pool.query(
+        `
+        SELECT id, room_code, expires_at
+        FROM rooms
+        WHERE guest_owner_hash = $1
+          AND expires_at > NOW()
+        LIMIT 1
+        `,
+        [ownerHash],
+      );
+
+      if (rows.length > 0) {
+        // 🔥 Reuse existing active room
+        return res.status(200).json({
+          roomId: rows[0].id,
+          roomCode: rows[0].room_code,
+          expiresAt: rows[0].expires_at,
+          ownerToken,
+        });
+      }
+    }
+
+    ownerToken = generateGuestOwnerToken();
+    ownerHash = hashGuestToken(ownerToken);
+
+    const roomId = uuid();
+    const roomCode = generateRoomCode();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await pool.query(
+      `
+      INSERT INTO rooms (
+        id,
+        name,
+        room_code,
+        is_private,
+        guest_owner_hash,
+        expires_at
+      )
+      VALUES ($1, $2, $3, true, $4, $5)
+      `,
+      [roomId, name, roomCode, ownerHash, expiresAt],
+    );
+
+    return res.status(201).json({
+      roomId,
+      roomCode,
+      expiresAt,
+      ownerToken,
+    });
+  } catch (err) {
+    console.error("Guest room creation error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
+  try {
+    const room = await findRoomById(req.params.roomId);
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    if (req.user) {
+      // Owner via JWT
+      if (room.owner_id && room.owner_id === req.user.id) {
+        return res.json({ isMember: true });
+      }
+
+      const member = await isRoomMember(room.id, req.user.id);
+      if (member) {
+        return res.json({ isMember: true });
+      }
+    }
+
+    const rawHeader = req.headers["x-guest-owner-token"];
+
+    // Express may return header as string | string[] | undefined
+    const guestOwnerToken = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+
+    if (
+      typeof guestOwnerToken === "string" &&
+      room.guest_owner_hash &&
+      hashGuestToken(guestOwnerToken) === room.guest_owner_hash
+    ) {
+      return res.json({ isMember: true });
+    }
+
+    // If room allows joins, guest sessions are allowed
+    if (!req.user && !guestOwnerToken) {
+      if (room.allow_joins) {
+        return res.json({ isMember: true });
+      }
+    }
+
+    return res.json({ isMember: false });
+  } catch (err) {
+    console.error("Membership check error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 router.get("/my", authMiddleware, async (req, res) => {
   const rooms = await findRoomsByOwner(req.user.id);
-
-  res.json({
-    rooms,
-  });
+  res.json({ rooms });
 });
 
-/**
- * Join room by code
- */
-router.post("/join", authMiddleware, async (req, res) => {
+router.post("/join", authMiddlewareOptional, async (req, res) => {
   const { roomCode } = req.body;
+
+  if (!roomCode) {
+    return res.status(400).json({ error: "Room code required" });
+  }
 
   const room = await findRoomByCode(roomCode);
   if (!room) {
     return res.status(404).json({ error: "Room not found" });
   }
 
-  res.json({
+  // 🔒 If joins disabled → block non-owners
+  // Only block JWT users if joins disabled
+  if (!room.allow_joins && req.user) {
+    return res.status(403).json({
+      error: "This room is not accepting new members",
+    });
+  }
+
+  // 👤 Guest users can directly enter (temporary rooms)
+  if (!req.user) {
+    return res.json({
+      roomId: room.id,
+      roomCode: room.room_code,
+      requiresApproval: false,
+    });
+  }
+
+  // 👑 If owner → allow direct entry
+  if (room.owner_id === req.user.id) {
+    return res.json({
+      roomId: room.id,
+      roomCode: room.room_code,
+      requiresApproval: false,
+    });
+  }
+
+  // 🔎 Check if already a member
+  const alreadyMember = await isRoomMember(room.id, req.user.id);
+  if (alreadyMember) {
+    return res.json({
+      roomId: room.id,
+      roomCode: room.room_code,
+      requiresApproval: false,
+    });
+  }
+
+  // 📨 Create join request instead of direct membership
+  const requestId = uuid();
+  await createJoinRequest(requestId, room.id, req.user.id);
+
+  return res.json({
     roomId: room.id,
     roomCode: room.room_code,
-    requiresApproval: room.is_private,
+    requiresApproval: true,
   });
 });
 
-router.get("/:roomId/membership", authMiddleware, async (req, res) => {
-  const { roomId } = req.params;
+/**
+ * ROOM META
+ */
+router.get("/:roomId/meta", authMiddlewareOptional, async (req, res) => {
+  const room = await findRoomById(req.params.roomId);
+  if (!room) return res.status(404).json({ error: "Room not found" });
 
-  const isMember = await isRoomMember(roomId, req.user.id);
+  let isOwner = false;
 
-  res.json({ isMember });
-});
+  // JWT owner
+  if (req.user && room.owner_id === req.user.id) {
+    isOwner = true;
+  }
 
-router.get("/:roomId/meta", authMiddleware, async (req, res) => {
-  const { roomId } = req.params;
-
-  const isOwner = await isRoomOwner(roomId, req.user.id);
-  const room = await findRoomById(roomId);
-
-  if (!room) {
-    return res.status(404).json({ error: "Room not found" });
+  // Guest owner
+  const guestOwnerToken = req.headers["x-guest-owner-token"];
+  if (
+    guestOwnerToken &&
+    room.guest_owner_hash &&
+    hashGuestToken(guestOwnerToken) === room.guest_owner_hash
+  ) {
+    isOwner = true;
   }
 
   res.json({
-    isOwner,
     roomCode: room.room_code,
-    isReadOnly: room.is_ready_only,
+    isReadOnly: room.is_read_only,
     allowJoins: room.allow_joins,
-    currentUserId: req.user.id,
+    currentUserId: req.user?.id ?? "guest",
+    isOwner,
+    name: room.name,
+    isGuestRoom: !!room.guest_owner_hash, // 🔥 add this
+    expiresAt: room.expires_at,
   });
 });
 
-router.patch("/:roomId/settings", authMiddleware, async (req, res) => {
-  const { roomId } = req.params;
+/**
+ * UPDATE SETTINGS (JWT OR GUEST)
+ */
+router.patch("/:roomId/settings", requireRoomOwner, async (req, res) => {
   const { isReadOnly, allowJoins } = req.body;
 
-  const isOwner = await isRoomOwner(roomId, req.user.id);
-  if (!isOwner) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
+  await updateRoomSettings(req.params.roomId, isReadOnly, allowJoins);
 
-  await updateRoomSettings(roomId, isReadOnly, allowJoins);
-
-  res.json({
-    message: "Room settings updated",
-    settings: { isReadOnly, allowJoins },
+  // 🔥 update socket cache immediately
+  updateRoomSettingsCache(req.params.roomId, {
+    isReadOnly,
+    allowJoins,
   });
+
+  res.json({ message: "Room settings updated" });
 });
 
+/**
+ * AUTH ROOM CREATION
+ */
 router.post("/", authMiddleware, async (req, res) => {
   const roomId = uuid();
   const roomCode = generateRoomCode();
 
   try {
     await createRoom(roomId, req.body.name, req.user.id, roomCode, true);
-
-    res.status(201).json({
-      roomId,
-      roomCode,
-    });
+    res.status(201).json({ roomId, roomCode });
   } catch (err) {
     if (err.message === "ROOM_LIMIT_REACHED") {
       return res.status(403).json({
         error: "You can only create up to 3 rooms",
       });
     }
-
-    throw err; // handled by global error middleware
+    throw err;
   }
 });
 
