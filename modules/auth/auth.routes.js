@@ -40,6 +40,7 @@ router.get(
       secure: true,
       sameSite: "none",
       maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: "/",
     });
 
     res.redirect(`${env.FRONTEND_URL}/dashboard`);
@@ -116,6 +117,7 @@ router.post("/login", async (req, res) => {
     secure: true,
     sameSite: "none",
     maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
   });
 
   res.json({ success: true });
