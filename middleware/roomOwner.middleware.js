@@ -7,12 +7,10 @@ export const requireRoomOwner = async (req, res, next) => {
   const room = await findRoomSettings(req.params.roomId);
   if (!room) return res.status(404).json({ error: "Room not found" });
 
-  // JWT owner
   if (req.user && room.owner_id === req.user.id) {
     return next();
   }
 
-  // Guest owner
   const guestOwnerToken = req.headers["x-guest-owner-token"];
   if (
     guestOwnerToken &&

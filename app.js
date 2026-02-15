@@ -5,6 +5,7 @@ import authRoutes from "./modules/auth/auth.routes.js";
 import roomRoutes from "./modules/rooms/rooms.routes.js";
 import requestRoutes from "./modules/requests/requests.routes.js";
 import cookieParser from "cookie-parser";
+import { env } from "./config/env.js";
 
 // import { apiLimiter, authLimiter } from "./middleware/rateLimit.middleware.js";
 
@@ -14,7 +15,7 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    origin: "https://sharehut-two.vercel.app",
+    origin: env.FRONTEND_URL,
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE"],
     allowedHeaders: [

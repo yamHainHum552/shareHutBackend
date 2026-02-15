@@ -38,8 +38,9 @@ router.get(
     res.cookie("token", token, {
       httpOnly: true,
       secure: true,
-      sameSite: "none",
+      sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
+      domain: ".sharehutlive.com",
       path: "/",
     });
 
@@ -115,7 +116,8 @@ router.post("/login", async (req, res) => {
   res.cookie("token", token, {
     httpOnly: true,
     secure: true,
-    sameSite: "none",
+    sameSite: "lax",
+    domain: ".sharehutlive.com",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/",
   });
