@@ -6,8 +6,37 @@ import passport from "passport";
 import { findUserByEmail, createUser, findUserById } from "./auth.service.js";
 import { env } from "../../config/env.js";
 import { authMiddleware } from "../../middleware/auth.middleware.js";
+import crypto from "crypto";
+import {
+  sendVerificationEmail,
+  saveVerificationToken,
+  verifyUserByToken,
+} from "./email.service.js";
 
 const router = express.Router();
+
+router.get("/verify-email", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ error: "Invalid token" });
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await verifyUserByToken(hashedToken);
+
+    if (!user) {
+      return res.status(400).json({ error: "Invalid or expired token" });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Verification failed" });
+  }
+});
 
 router.get(
   "/google",
@@ -58,29 +87,35 @@ router.post("/register", async (req, res) => {
 
     const existingUser = await findUserByEmail(email);
     if (existingUser) {
-      return res
-        .status(409)
-        .json({ error: "User already exists with this email" });
+      return res.status(409).json({ error: "User already exists" });
     }
 
-    await createUser({
+    const user = await createUser({
       name,
       email,
       password,
       provider: "local",
     });
 
+    // 🔐 Generate token
+    const rawToken = crypto.randomBytes(32).toString("hex");
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    await saveVerificationToken(user.id, hashedToken, expires);
+
+    await sendVerificationEmail(user.email, rawToken);
+
     return res.status(201).json({
-      message: "User registered successfully",
+      message: "Registered successfully. Please verify your email.",
     });
   } catch (error) {
-    console.error("Register error:", error);
-
-    if (error.code === "23505") {
-      return res
-        .status(409)
-        .json({ error: "User already exists with this email" });
-    }
+    console.error(error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

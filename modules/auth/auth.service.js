@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from "uuid";
  */
 export const findUserByEmail = async (email) => {
   const { rows } = await pool.query(
-    "SELECT id, name, email, password_hash, provider FROM users WHERE email = $1",
+    "SELECT id, name, email, password_hash, provider, is_verified FROM users WHERE email = $1",
     [email],
   );
   return rows[0] || null;

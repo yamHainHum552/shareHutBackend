@@ -2,6 +2,7 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { env } from "./env.js";
 import { findUserByEmail, createUser } from "../modules/auth/auth.service.js";
+import { pool } from "./db.js";
 
 passport.use(
   new GoogleStrategy(
@@ -33,6 +34,10 @@ passport.use(
           provider: "google",
           password: null,
         });
+
+        await pool.query("UPDATE users SET is_verified = TRUE WHERE id = $1", [
+          user.id,
+        ]);
 
         return done(null, user);
       } catch (err) {
