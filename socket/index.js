@@ -36,13 +36,12 @@ const guestTextUsage = new Map();
 /* -------------------------------------------------------------------------- */
 /*                               Helper Methods                               */
 /* -------------------------------------------------------------------------- */
-
 const getUserKey = (socket) => {
   if (socket.user.type === "user") {
-    return socket.user.id;
+    return `user:${socket.user.id}`;
   }
 
-  return `guest:${socket.user.id}:${socket.id}`;
+  return `guest:${socket.user.id}`;
 };
 
 const getUserInfo = async (userId) => {
