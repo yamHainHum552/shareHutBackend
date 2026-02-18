@@ -25,6 +25,7 @@ export let io;
 const roomUsers = new Map();
 const roomText = new Map();
 const roomSettingsCache = new Map();
+const roomTyping = new Map();
 
 /**
  * guestTextUsage:
@@ -42,6 +43,20 @@ const getUserKey = (socket) => {
   }
 
   return `guest:${socket.user.id}`;
+};
+
+const emitTypingList = (roomId) => {
+  const typingMap = roomTyping.get(roomId);
+  if (!typingMap) {
+    io.to(roomId).emit("typing-update", []);
+    return;
+  }
+
+  const typingUsers = Array.from(typingMap.values()).map(
+    (entry) => entry.userData,
+  );
+
+  io.to(roomId).emit("typing-update", typingUsers);
 };
 
 const getUserInfo = async (userId) => {
@@ -82,16 +97,37 @@ const cleanupRoomUsage = (roomId) => {
     }
   }
 };
-
 const removeSocketFromRoom = (socket) => {
   const roomId = socket.currentRoom;
   if (!roomId) return;
+
+  /* -------------------- REMOVE FROM TYPING MAP -------------------- */
+  const typingMap = roomTyping.get(roomId);
+  if (typingMap) {
+    const userKey = getUserKey(socket);
+    const entry = typingMap.get(userKey);
+
+    if (entry) {
+      entry.sockets.delete(socket.id);
+
+      if (entry.sockets.size === 0) {
+        typingMap.delete(userKey);
+      }
+
+      if (typingMap.size === 0) {
+        roomTyping.delete(roomId);
+      } else {
+        emitTypingList(roomId);
+      }
+    }
+  }
+
+  /* -------------------- ORIGINAL PRESENCE CLEANUP -------------------- */
 
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return;
 
   const userKey = getUserKey(socket);
-
   const entry = usersMap.get(userKey);
   if (!entry) return;
 
@@ -106,6 +142,7 @@ const removeSocketFromRoom = (socket) => {
     roomText.delete(roomId);
     roomSettingsCache.delete(roomId);
     cleanupRoomUsage(roomId);
+    roomTyping.delete(roomId); // ensure full cleanup
   } else {
     emitUserList(roomId);
   }
@@ -265,6 +302,56 @@ export const initSocket = (serverIo) => {
         socket.emit("text-update", roomText.get(roomId));
       }
     });
+    socket.on("typing-start", ({ roomId }) => {
+      if (!socket.isRoomMember) return;
+
+      const usersMap = roomUsers.get(roomId);
+      if (!usersMap) return;
+
+      const userKey = getUserKey(socket);
+      const userEntry = usersMap.get(userKey);
+      if (!userEntry) return;
+
+      if (!roomTyping.has(roomId)) {
+        roomTyping.set(roomId, new Map());
+      }
+
+      const typingMap = roomTyping.get(roomId);
+
+      if (!typingMap.has(userKey)) {
+        typingMap.set(userKey, {
+          userData: userEntry.userData,
+          sockets: new Set([socket.id]),
+        });
+      } else {
+        typingMap.get(userKey).sockets.add(socket.id);
+      }
+
+      emitTypingList(roomId);
+    });
+    socket.on("typing-stop", ({ roomId }) => {
+      if (!socket.isRoomMember) return;
+
+      const typingMap = roomTyping.get(roomId);
+      if (!typingMap) return;
+
+      const userKey = getUserKey(socket);
+      const entry = typingMap.get(userKey);
+      if (!entry) return;
+
+      entry.sockets.delete(socket.id);
+
+      if (entry.sockets.size === 0) {
+        typingMap.delete(userKey);
+      }
+
+      if (typingMap.size === 0) {
+        roomTyping.delete(roomId);
+      }
+
+      emitTypingList(roomId);
+    });
+
     socket.on("toggle-room-lock", async ({ roomId, locked }) => {
       if (!socket.isRoomMember) return;
 
@@ -348,19 +435,6 @@ export const initSocket = (serverIo) => {
             settings.guestOwnerHash &&
             hashGuestToken(socket.user.guestOwnerToken) ===
               settings.guestOwnerHash;
-
-      // Guest edit limit (15)
-      if (socket.user.type === "guest") {
-        const key = `${roomId}:${socket.user.id}`;
-        const current = guestTextUsage.get(key) || 0;
-
-        if (current >= 15) {
-          socket.emit("guest-limit-reached");
-          return;
-        }
-
-        guestTextUsage.set(key, current + 1);
-      }
 
       // Read-only enforcement
       if (settings.isReadOnly && !isOwner) return;
