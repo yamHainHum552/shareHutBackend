@@ -93,7 +93,6 @@ router.post("/guest", async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 });
-
 router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
   try {
     const room = await findRoomById(req.params.roomId);
@@ -101,21 +100,37 @@ router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
       return res.status(404).json({ error: "Room not found" });
     }
 
-    if (req.user) {
-      // Owner via JWT
-      if (room.owner_id && room.owner_id === req.user.id) {
-        return res.json({ isMember: true });
-      }
+    const isAuthRoom = !!room.owner_id;
+    const isGuestRoom = !!room.guest_owner_hash;
 
+    /* ---------------------------------- */
+    /* 🔒 AUTH ROOMS REQUIRE LOGIN       */
+    /* ---------------------------------- */
+    if (isAuthRoom && !req.user) {
+      return res.json({ isMember: false });
+    }
+
+    /* ---------------------------------- */
+    /* 👑 JWT OWNER                       */
+    /* ---------------------------------- */
+    if (req.user && room.owner_id === req.user.id) {
+      return res.json({ isMember: true });
+    }
+
+    /* ---------------------------------- */
+    /* 👤 AUTH USER MEMBER                */
+    /* ---------------------------------- */
+    if (req.user) {
       const member = await isRoomMember(room.id, req.user.id);
       if (member) {
         return res.json({ isMember: true });
       }
     }
 
+    /* ---------------------------------- */
+    /* 👑 GUEST OWNER TOKEN               */
+    /* ---------------------------------- */
     const rawHeader = req.headers["x-guest-owner-token"];
-
-    // Express may return header as string | string[] | undefined
     const guestOwnerToken = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
 
     if (
@@ -126,11 +141,11 @@ router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
       return res.json({ isMember: true });
     }
 
-    // If room allows joins, guest sessions are allowed
-    if (!req.user && !guestOwnerToken) {
-      if (room.allow_joins) {
-        return res.json({ isMember: true });
-      }
+    /* ---------------------------------- */
+    /* 👤 Anonymous in Guest Room         */
+    /* ---------------------------------- */
+    if (isGuestRoom && !req.user && room.allow_joins) {
+      return res.json({ isMember: true });
     }
 
     return res.json({ isMember: false });
@@ -144,64 +159,96 @@ router.get("/my", authMiddleware, async (req, res) => {
   const rooms = await findRoomsByOwner(req.user.id);
   res.json({ rooms });
 });
-
 router.post("/join", authMiddlewareOptional, async (req, res) => {
-  const { roomCode } = req.body;
+  try {
+    const { roomCode } = req.body;
 
-  if (!roomCode) {
-    return res.status(400).json({ error: "Room code required" });
+    if (!roomCode) {
+      return res.status(400).json({ error: "Room code required" });
+    }
+
+    const room = await findRoomByCode(roomCode.toUpperCase());
+    if (!room) {
+      return res.status(404).json({ error: "Room not found" });
+    }
+
+    const isAuthRoom = !!room.owner_id;
+    const isGuestRoom = !!room.guest_owner_hash;
+
+    /* ---------------------------------- */
+    /* 🔒 AUTH ROOMS REQUIRE LOGIN       */
+    /* ---------------------------------- */
+    if (isAuthRoom && !req.user) {
+      return res.status(401).json({
+        error: "Authentication required to join this room",
+      });
+    }
+
+    /* ---------------------------------- */
+    /* 👑 OWNER DIRECT ENTRY              */
+    /* ---------------------------------- */
+    if (req.user && room.owner_id === req.user.id) {
+      return res.json({
+        roomId: room.id,
+        roomCode: room.room_code,
+        requiresApproval: false,
+      });
+    }
+
+    /* ---------------------------------- */
+    /* 🚫 If joins disabled               */
+    /* ---------------------------------- */
+    if (!room.allow_joins) {
+      return res.status(403).json({
+        error: "This room is not accepting new members",
+      });
+    }
+
+    /* ---------------------------------- */
+    /* 👤 GUEST ROOM DIRECT ENTRY         */
+    /* ---------------------------------- */
+    if (isGuestRoom && !req.user) {
+      return res.json({
+        roomId: room.id,
+        roomCode: room.room_code,
+        requiresApproval: false,
+      });
+    }
+
+    /* ---------------------------------- */
+    /* 🔎 Already member?                 */
+    /* ---------------------------------- */
+    if (req.user) {
+      const alreadyMember = await isRoomMember(room.id, req.user.id);
+      if (alreadyMember) {
+        return res.json({
+          roomId: room.id,
+          roomCode: room.room_code,
+          requiresApproval: false,
+        });
+      }
+
+      /* ---------------------------------- */
+      /* 📨 Create join request             */
+      /* ---------------------------------- */
+      const requestId = uuid();
+      await createJoinRequest(requestId, room.id, req.user.id);
+
+      return res.json({
+        roomId: room.id,
+        roomCode: room.room_code,
+        requiresApproval: true,
+      });
+    }
+
+    /* ---------------------------------- */
+    /* ❌ Fallback safety                  */
+    /* ---------------------------------- */
+    return res.status(403).json({ error: "Unable to join room" });
+  } catch (err) {
+    console.error("Join room error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
-
-  const room = await findRoomByCode(roomCode);
-  if (!room) {
-    return res.status(404).json({ error: "Room not found" });
-  }
-
-  // 🔒 If joins disabled → block non-owners
-  // Only block JWT users if joins disabled
-  if (!room.allow_joins && req.user) {
-    return res.status(403).json({
-      error: "This room is not accepting new members",
-    });
-  }
-
-  // 👤 Guest users can directly enter (temporary rooms)
-  if (!req.user) {
-    return res.json({
-      roomId: room.id,
-      roomCode: room.room_code,
-      requiresApproval: false,
-    });
-  }
-
-  // 👑 If owner → allow direct entry
-  if (room.owner_id === req.user.id) {
-    return res.json({
-      roomId: room.id,
-      roomCode: room.room_code,
-      requiresApproval: false,
-    });
-  }
-
-  // 🔎 Check if already a member
-  const alreadyMember = await isRoomMember(room.id, req.user.id);
-  if (alreadyMember) {
-    return res.json({
-      roomId: room.id,
-      roomCode: room.room_code,
-      requiresApproval: false,
-    });
-  }
-
-  // 📨 Create join request instead of direct membership
-  const requestId = uuid();
-  await createJoinRequest(requestId, room.id, req.user.id);
-
-  return res.json({
-    roomId: room.id,
-    roomCode: room.room_code,
-    requiresApproval: true,
-  });
 });
 
 /**

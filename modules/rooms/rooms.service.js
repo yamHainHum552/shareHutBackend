@@ -7,6 +7,8 @@ import {
 } from "../../utils/guestToken.js";
 import { env } from "../../config/env.js";
 import { validate as uuidValidate } from "uuid";
+import cloudinary from "../../utils/Cloudinary.js";
+import { cleanupGuestRoomCloudinary } from "../files/cleanup.service.js";
 
 /**
  * ===========================
@@ -208,14 +210,42 @@ export const addRoomMember = async (roomId, userId, role = "member") => {
   );
 };
 
-export const deleteExpiredGuestRooms = async () => {
-  await pool.query(`
-    DELETE FROM rooms
-    WHERE guest_owner_hash IS NOT NULL
-      AND expires_at <= NOW()
-  `);
-};
+// adjust import path if needed
 
+export const deleteExpiredGuestRooms = async () => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id FROM rooms
+      WHERE guest_owner_hash IS NOT NULL
+        AND expires_at <= NOW()
+    `);
+
+    if (!rows.length) return;
+
+    for (const room of rows) {
+      const roomId = room.id;
+
+      try {
+        /* ---------------- Cloudinary Cleanup ---------------- */
+        await cleanupGuestRoomCloudinary(roomId);
+
+        /* ---------------- DB Cleanup ---------------- */
+        await pool.query(`DELETE FROM room_files WHERE room_id = $1`, [roomId]);
+
+        await pool.query(`DELETE FROM rooms WHERE id = $1`, [roomId]);
+
+        console.log(`✅ Expired guest room cleaned: ${roomId}`);
+      } catch (err) {
+        console.error(
+          `❌ Failed cleaning expired room ${roomId}:`,
+          err.message,
+        );
+      }
+    }
+  } catch (err) {
+    console.error("❌ Expired room cleanup failed:", err.message);
+  }
+};
 export const removeRoomMember = async (roomId, userId) => {
   await pool.query(
     `

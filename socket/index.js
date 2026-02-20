@@ -26,6 +26,7 @@ const roomUsers = new Map();
 const roomText = new Map();
 const roomSettingsCache = new Map();
 const roomTyping = new Map();
+const roomDrawData = new Map();
 
 /**
  * guestTextUsage:
@@ -141,9 +142,12 @@ const removeSocketFromRoom = (socket) => {
     roomUsers.delete(roomId);
     roomText.delete(roomId);
     roomSettingsCache.delete(roomId);
+    roomDrawData.delete(roomId); // 🔥 ADD THIS
     cleanupRoomUsage(roomId);
-    roomTyping.delete(roomId); // ensure full cleanup
-  } else {
+    roomTyping.delete(roomId);
+  }
+  // ensure full cleanup
+  else {
     emitUserList(roomId);
   }
 
@@ -301,7 +305,11 @@ export const initSocket = (serverIo) => {
       if (roomText.has(roomId)) {
         socket.emit("text-update", roomText.get(roomId));
       }
+      if (roomDrawData.has(roomId)) {
+        socket.emit("draw-sync", roomDrawData.get(roomId));
+      }
     });
+
     socket.on("typing-start", ({ roomId }) => {
       if (!socket.isRoomMember) return;
 
@@ -441,6 +449,85 @@ export const initSocket = (serverIo) => {
 
       roomText.set(roomId, text);
       socket.to(roomId).emit("text-update", text);
+    });
+    /* ---------------- DRAW UPDATE ---------------- */
+
+    /* ---------------- DRAW EVENT ---------------- */
+
+    socket.on("draw-event", ({ roomId, stroke }) => {
+      if (!socket.isRoomMember) return;
+
+      const settings = roomSettingsCache.get(roomId);
+      if (!settings) return;
+
+      const isOwner =
+        socket.user.type === "user"
+          ? settings.ownerId === socket.user.id
+          : socket.user.type === "guest-owner" &&
+            settings.guestOwnerHash &&
+            hashGuestToken(socket.user.guestOwnerToken) ===
+              settings.guestOwnerHash;
+
+      // 🔐 Enforce read-only
+      if (settings.isReadOnly && !isOwner) return;
+
+      const strokes = roomDrawData.get(roomId) || [];
+      strokes.push(stroke);
+      roomDrawData.set(roomId, strokes);
+
+      socket.to(roomId).emit("draw-event", stroke);
+    });
+
+    socket.on("draw-clear", ({ roomId }) => {
+      if (!socket.isRoomMember) return;
+
+      const settings = roomSettingsCache.get(roomId);
+      if (!settings) return;
+
+      const isOwner =
+        socket.user.type === "user"
+          ? settings.ownerId === socket.user.id
+          : socket.user.type === "guest-owner" &&
+            settings.guestOwnerHash &&
+            hashGuestToken(socket.user.guestOwnerToken) ===
+              settings.guestOwnerHash;
+
+      if (settings.isReadOnly && !isOwner) return;
+
+      roomDrawData.set(roomId, []);
+      io.to(roomId).emit("draw-clear");
+    });
+    socket.on("request-draw-sync", ({ roomId }) => {
+      if (!socket.isRoomMember) return;
+
+      const strokes = roomDrawData.get(roomId) || [];
+      socket.emit("draw-sync", strokes);
+    });
+
+    socket.on("draw-undo", ({ roomId, strokeId }) => {
+      if (!socket.isRoomMember) return;
+
+      const settings = roomSettingsCache.get(roomId);
+      if (!settings) return;
+
+      const isOwner =
+        socket.user.type === "user"
+          ? settings.ownerId === socket.user.id
+          : socket.user.type === "guest-owner" &&
+            settings.guestOwnerHash &&
+            hashGuestToken(socket.user.guestOwnerToken) ===
+              settings.guestOwnerHash;
+
+      if (settings.isReadOnly && !isOwner) return;
+
+      const strokes = roomDrawData.get(roomId) || [];
+
+      roomDrawData.set(
+        roomId,
+        strokes.filter((s) => s.id !== strokeId),
+      );
+
+      io.to(roomId).emit("draw-undo", strokeId);
     });
 
     /* ------------------------------ LEAVE ROOM ------------------------------ */

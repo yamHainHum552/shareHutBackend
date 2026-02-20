@@ -18,3 +18,8 @@ export const joinRequestLimiter = rateLimit({
   max: 3,
   message: { error: "Too many join requests." },
 });
+export const fileUploadLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 uploads per minute per IP
+  message: { error: "Too many file uploads. Try again later." },
+});

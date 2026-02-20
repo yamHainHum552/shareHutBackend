@@ -5,26 +5,21 @@ const { Pool } = pkg;
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
-
-  ssl: {
-    rejectUnauthorized: false,
-  },
-
-  max: 10,
+  max: 5,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on("error", (err) => {
-  console.error("Unexpected PostgreSQL pool error:", err);
+  console.error("Postgres pool error:", err);
 });
 
 (async () => {
   try {
     const client = await pool.connect();
-    console.log("Connected to PostgreSQL");
+    console.log("✅ PostgreSQL connected successfully");
     client.release();
   } catch (err) {
-    console.error("PostgreSQL connection error:", err.message);
+    console.error("❌ PostgreSQL connection failed:", err.message);
   }
 })();

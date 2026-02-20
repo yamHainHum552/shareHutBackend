@@ -6,6 +6,7 @@ import roomRoutes from "./modules/rooms/rooms.routes.js";
 import requestRoutes from "./modules/requests/requests.routes.js";
 import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
+import fileRoutes from "./modules/files/files.routes.js";
 
 // import { apiLimiter, authLimiter } from "./middleware/rateLimit.middleware.js";
 
@@ -34,6 +35,8 @@ app.use(express.json({ limit: "20kb" })); // Payload protection
 
 app.use("/api/auth", authRoutes);
 app.use("/api/rooms", roomRoutes);
+app.use("/api/files", fileRoutes);
+
 app.use("/api/requests", requestRoutes);
 
 export default app;
