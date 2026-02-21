@@ -19,6 +19,7 @@ import { updateRoomSettingsCache } from "../../socket/index.js";
 import { hashGuestToken } from "../../utils/guestToken.js";
 import { pool } from "../../config/db.js";
 import { generateGuestOwnerToken } from "../../utils/guestToken.js";
+import { env } from "../../config/env.js";
 const router = express.Router();
 
 /**
@@ -231,14 +232,21 @@ router.post("/join", authMiddlewareOptional, async (req, res) => {
       /* ---------------------------------- */
       /* 📨 Create join request             */
       /* ---------------------------------- */
-      const requestId = uuid();
-      await createJoinRequest(requestId, room.id, req.user.id);
-
-      return res.json({
-        roomId: room.id,
-        roomCode: room.room_code,
-        requiresApproval: true,
-      });
+      if (req.user) {
+        const requestId = uuid();
+        await createJoinRequest(requestId, room.id, req.user.id);
+        if (io) {
+          io.to(room.id).emit("new-join-request", {
+            roomId: room.id,
+            requestId,
+          });
+        }
+        return res.json({
+          roomId: room.id,
+          roomCode: room.room_code,
+          requiresApproval: true,
+        });
+      }
     }
 
     /* ---------------------------------- */
@@ -317,7 +325,7 @@ router.post("/", authMiddleware, async (req, res) => {
   } catch (err) {
     if (err.message === "ROOM_LIMIT_REACHED") {
       return res.status(403).json({
-        error: "You can only create up to 3 rooms",
+        error: `You can only create up to ${env.MAX_ROOMS_PER_USER} rooms`,
       });
     }
     throw err;

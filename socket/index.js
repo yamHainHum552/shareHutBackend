@@ -257,12 +257,12 @@ export const initSocket = (serverIo) => {
       }
 
       // Auth user membership enforcement
+      // Auth user membership enforcement
       if (!isOwner && socket.user.type === "user") {
         const allowed = await isRoomMember(roomId, socket.user.id);
+
         if (!allowed) {
-          socket.emit("join-denied", {
-            reason: "You are not a member of this room",
-          });
+          socket.emit("approval-required");
           return;
         }
       }

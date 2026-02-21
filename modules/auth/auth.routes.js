@@ -69,7 +69,7 @@ router.get(
       secure: true,
       sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      domain: ".sharehutlive.com",
+      // domain: ".sharehutlive.com",
       path: "/",
     });
 
@@ -125,7 +125,7 @@ router.post("/logout", (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    domain: ".sharehutlive.com",
+    // domain: ".sharehutlive.com",
     path: "/",
   });
   res.json({ success: true });
@@ -158,7 +158,7 @@ router.post("/login", async (req, res) => {
     httpOnly: true,
     secure: true,
     sameSite: "lax",
-    domain: ".sharehutlive.com",
+    // domain: ".sharehutlive.com",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/",
   });
