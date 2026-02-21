@@ -20,6 +20,7 @@ import { hashGuestToken } from "../../utils/guestToken.js";
 import { pool } from "../../config/db.js";
 import { generateGuestOwnerToken } from "../../utils/guestToken.js";
 import { env } from "../../config/env.js";
+import { io } from "../../socket/index.js";
 const router = express.Router();
 
 /**
