@@ -74,10 +74,12 @@ router.post("/approve/:requestId", authMiddleware, async (req, res) => {
       await addRoomMember(request.room_id, request.user_id, "member");
       await updateRequestStatus(request.id, "approved", client);
 
-      // 🔔 OPTIONAL: notify requester
       if (io) {
+        // 🔔 Broadcoast to the room so the requester (listening on the room)
+        // knows they can now successfully call the "join-room" socket event.
         io.to(request.room_id).emit("join-request-approved", {
           userId: request.user_id,
+          roomId: request.room_id,
         });
       }
     } else {

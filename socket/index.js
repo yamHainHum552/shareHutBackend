@@ -39,11 +39,20 @@ const guestTextUsage = new Map();
 /*                               Helper Methods                               */
 /* -------------------------------------------------------------------------- */
 const getUserKey = (socket) => {
-  if (socket.user.type === "user") {
-    return `user:${socket.user.id}`;
+  // Always provide a prefix to prevent ID collisions between guest and auth users
+  return `${socket.user.type}:${socket.user.id}`;
+};
+export const getLiveRoomSnapshot = () => {
+  const rooms = [];
+
+  for (const [roomId, usersMap] of roomUsers.entries()) {
+    rooms.push({
+      roomId,
+      participantsCount: usersMap.size,
+    });
   }
 
-  return `guest:${socket.user.id}`;
+  return rooms;
 };
 
 const emitTypingList = (roomId) => {
@@ -72,9 +81,10 @@ const emitUserList = (roomId) => {
   const usersMap = roomUsers.get(roomId);
   if (!usersMap) return;
 
+  // We convert the map to an array and ensure we only send what the frontend needs
   const users = Array.from(usersMap.values())
     .map((entry) => entry.userData)
-    .filter((u) => u && u.id && u.name);
+    .filter((u) => u && u.id); // Guests use session IDs, so u.id will exist
 
   io.to(roomId).emit("user-list", users);
 };
@@ -98,63 +108,6 @@ const cleanupRoomUsage = (roomId) => {
     }
   }
 };
-const removeSocketFromRoom = (socket) => {
-  const roomId = socket.currentRoom;
-  if (!roomId) return;
-
-  /* -------------------- REMOVE FROM TYPING MAP -------------------- */
-  const typingMap = roomTyping.get(roomId);
-  if (typingMap) {
-    const userKey = getUserKey(socket);
-    const entry = typingMap.get(userKey);
-
-    if (entry) {
-      entry.sockets.delete(socket.id);
-
-      if (entry.sockets.size === 0) {
-        typingMap.delete(userKey);
-      }
-
-      if (typingMap.size === 0) {
-        roomTyping.delete(roomId);
-      } else {
-        emitTypingList(roomId);
-      }
-    }
-  }
-
-  /* -------------------- ORIGINAL PRESENCE CLEANUP -------------------- */
-
-  const usersMap = roomUsers.get(roomId);
-  if (!usersMap) return;
-
-  const userKey = getUserKey(socket);
-  const entry = usersMap.get(userKey);
-  if (!entry) return;
-
-  entry.sockets.delete(socket.id);
-
-  if (entry.sockets.size === 0) {
-    usersMap.delete(userKey);
-  }
-
-  if (usersMap.size === 0) {
-    roomUsers.delete(roomId);
-    roomText.delete(roomId);
-    roomSettingsCache.delete(roomId);
-    roomDrawData.delete(roomId); // 🔥 ADD THIS
-    cleanupRoomUsage(roomId);
-    roomTyping.delete(roomId);
-  }
-  // ensure full cleanup
-  else {
-    emitUserList(roomId);
-  }
-
-  socket.leave(roomId);
-  socket.currentRoom = null;
-  socket.isRoomMember = false;
-};
 
 /* -------------------------------------------------------------------------- */
 /*                               Initialize Socket                            */
@@ -165,43 +118,83 @@ export const initSocket = (serverIo) => {
 
   /* ------------------------------ AUTH LAYER ------------------------------ */
 
-  io.use((socket, next) => {
+  /* socket/index.js */
+  io.use(async (socket, next) => {
     try {
-      const cookies = cookie.parse(socket.handshake.headers.cookie || "");
-      const jwtToken = cookies.token;
-
-      if (jwtToken) {
-        const payload = jwt.verify(jwtToken, env.JWT_SECRET);
-        socket.user = {
-          type: "user",
-          id: payload.id,
-        };
-        return next();
-      }
+      const parsedCookies = cookie.parse(socket.handshake.headers.cookie || "");
+      const jwtToken = parsedCookies.token;
 
       const guestOwnerToken = socket.handshake.auth?.guestOwnerToken;
+      const guestSessionId = socket.handshake.auth?.guestSessionId;
+      const guestName = socket.handshake.auth?.guestName || "Guest";
+
+      /* -------------------------------------------------- */
+      /* 1️⃣ Authenticated User (JWT)                       */
+      /* -------------------------------------------------- */
+      if (jwtToken) {
+        try {
+          const payload = jwt.verify(jwtToken, env.JWT_SECRET);
+
+          const { rows } = await pool.query(
+            "SELECT id, is_banned FROM users WHERE id = $1",
+            [payload.id],
+          );
+
+          if (!rows.length) {
+            return next(new Error("User not found"));
+          }
+
+          if (rows[0].is_banned) {
+            return next(new Error("Account banned"));
+          }
+
+          socket.user = {
+            type: "user",
+            id: payload.id,
+          };
+
+          return next();
+        } catch (err) {
+          console.error("JWT verification failed:", err.message);
+          return next(new Error("Invalid JWT"));
+        }
+      }
+
+      /* -------------------------------------------------- */
+      /* 2️⃣ Guest Owner                                    */
+      /* -------------------------------------------------- */
       if (guestOwnerToken) {
+        const hashed = hashGuestToken(guestOwnerToken);
+
         socket.user = {
           type: "guest-owner",
-          id: guestOwnerToken, // ✅ give stable id
-          name: "Guest Owner", // ✅ define name
-          guestOwnerToken,
+          id: hashed, // 🔥 Use hashed value as stable ID
+          guestOwnerToken, // keep raw for potential comparisons
+          name: "Room Owner (Guest)",
         };
+
         return next();
       }
 
-      const guestSessionId = socket.handshake.auth?.guestSessionId;
+      /* -------------------------------------------------- */
+      /* 3️⃣ Regular Guest                                  */
+      /* -------------------------------------------------- */
       if (guestSessionId) {
         socket.user = {
           type: "guest",
           id: guestSessionId,
-          name: socket.handshake.auth?.guestName || "Guest",
+          name: guestName,
         };
+
         return next();
       }
 
-      return next(new Error("Unauthorized"));
-    } catch {
+      /* -------------------------------------------------- */
+      /* ❌ Unauthorized                                     */
+      /* -------------------------------------------------- */
+      return next(new Error("Unauthorized socket connection"));
+    } catch (err) {
+      console.error("Socket auth error:", err.message);
       return next(new Error("Unauthorized"));
     }
   });
@@ -209,28 +202,54 @@ export const initSocket = (serverIo) => {
   /* ------------------------------ CONNECTION ------------------------------ */
 
   io.on("connection", (socket) => {
-    /* ------------------------------ JOIN ROOM ------------------------------ */
+    /* socket/index.js */
+
+    /* socket/index.js */
+
+    const removeSocketFromRoom = (socket) => {
+      const roomId = socket.currentRoom;
+      if (!roomId) return;
+
+      const userKey = getUserKey(socket);
+      const usersMap = roomUsers.get(roomId);
+
+      if (usersMap && usersMap.has(userKey)) {
+        const entry = usersMap.get(userKey);
+        entry.sockets.delete(socket.id);
+
+        // Only remove user from list if ALL their tabs/sockets are closed
+        if (entry.sockets.size === 0) {
+          usersMap.delete(userKey);
+
+          // Notify remaining users that this person actually left
+          if (usersMap.size > 0) {
+            emitUserList(roomId);
+          }
+        }
+      }
+
+      // NOTE: We do NOT delete roomUsers, roomText, or roomSettingsCache here.
+      // This ensures that if the last person refreshes, the room state is
+      // still there when they reconnect 200ms later.
+
+      socket.leave(roomId);
+      socket.currentRoom = null;
+      socket.isRoomMember = false;
+    };
+
+    // ... inside io.on("connection") ...
 
     socket.on("join-room", async ({ roomId }) => {
       if (!socketRateLimit(socket, "join", 3, 10000)) return;
 
       const room = await findRoomById(roomId);
-
       if (!room) {
-        socket.emit("join-denied", {
-          reason: "Room expired or not found",
-        });
+        socket.emit("join-denied", { reason: "Room not found" });
         return;
       }
 
-      // Expiry check
-      if (room.expires_at && new Date(room.expires_at) <= new Date()) {
-        socket.emit("room-expired");
-        return;
-      }
-
+      // 1. Settings Cache Logic
       let settings = roomSettingsCache.get(roomId);
-
       if (!settings) {
         settings = {
           ownerId: room.owner_id,
@@ -241,32 +260,27 @@ export const initSocket = (serverIo) => {
         roomSettingsCache.set(roomId, settings);
       }
 
+      // 2. Authorization
       const isOwner =
         (socket.user.type === "user" && settings.ownerId === socket.user.id) ||
         (socket.user.type === "guest-owner" &&
-          settings.guestOwnerHash &&
-          hashGuestToken(socket.user.guestOwnerToken) ===
-            settings.guestOwnerHash);
+          settings.guestOwnerHash === socket.user.id);
 
-      // Locked room enforcement
-      if (!isOwner && !settings.allowJoins) {
-        socket.emit("join-denied", {
-          reason: "This room is locked",
-        });
-        return;
-      }
-
-      // Auth user membership enforcement
-      // Auth user membership enforcement
-      if (!isOwner && socket.user.type === "user") {
-        const allowed = await isRoomMember(roomId, socket.user.id);
-
-        if (!allowed) {
-          socket.emit("approval-required");
+      if (!isOwner) {
+        if (!settings.allowJoins) {
+          socket.emit("join-denied", { reason: "Room is locked" });
           return;
+        }
+        if (socket.user.type === "user") {
+          const allowed = await isRoomMember(roomId, socket.user.id);
+          if (!allowed) {
+            socket.emit("approval-required");
+            return;
+          }
         }
       }
 
+      // 3. State Management
       socket.join(roomId);
       socket.currentRoom = roomId;
       socket.isRoomMember = true;
@@ -276,40 +290,45 @@ export const initSocket = (serverIo) => {
       }
 
       const usersMap = roomUsers.get(roomId);
-
       const userKey = getUserKey(socket);
 
+      // 4. Participant Registration
       if (!usersMap.has(userKey)) {
         let userData;
-
         if (socket.user.type === "user") {
-          userData = await getUserInfo(socket.user.id);
+          const dbUser = await getUserInfo(socket.user.id);
+          userData = {
+            id: socket.user.id,
+            name: dbUser?.name || "Member",
+            type: "user",
+          };
         } else {
+          // Use userKey (type:id) as the unique ID for the frontend list
           userData = {
             id: userKey,
-            name: socket.user.name,
-            type: socket.user.type, // ✅ preserve actual type
+            name: socket.user.name || "Guest",
+            type: socket.user.type,
           };
         }
-
-        usersMap.set(userKey, {
-          userData,
-          sockets: new Set([socket.id]),
-        });
+        usersMap.set(userKey, { userData, sockets: new Set([socket.id]) });
       } else {
+        // Re-attach to existing user entry (handles multi-tab and refresh)
         usersMap.get(userKey).sockets.add(socket.id);
       }
 
+      // 5. Final Sync
       emitUserList(roomId);
 
-      if (roomText.has(roomId)) {
+      if (roomText.has(roomId))
         socket.emit("text-update", roomText.get(roomId));
-      }
-      if (roomDrawData.has(roomId)) {
+      if (roomDrawData.has(roomId))
         socket.emit("draw-sync", roomDrawData.get(roomId));
-      }
-    });
 
+      socket.emit("room-settings-updated", {
+        isReadOnly: settings.isReadOnly,
+        allowJoins: settings.allowJoins,
+      });
+    });
     socket.on("typing-start", ({ roomId }) => {
       if (!socket.isRoomMember) return;
 

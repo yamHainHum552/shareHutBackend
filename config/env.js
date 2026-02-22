@@ -12,4 +12,5 @@ export const env = {
   RESEND_API_KEY: process.env.RESEND_API_KEY,
   EMAIL_FROM: process.env.EMAIL_FROM,
   CLIENT_URL: process.env.CLIENT_URL,
+  NODE_ENV: process.env.NODE_ENV,
 };

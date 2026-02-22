@@ -132,8 +132,9 @@ export const findRoomById = async (roomId) => {
   expires_at
 FROM rooms
 
-    WHERE id = $1
-      AND (expires_at IS NULL OR expires_at > NOW())
+   WHERE id = $1
+AND is_deleted IS NOT TRUE
+AND (expires_at IS NULL OR expires_at > NOW())
     `,
     [roomId],
   );
@@ -147,6 +148,7 @@ export const findRoomByCode = async (roomCode) => {
     SELECT *
     FROM rooms
     WHERE room_code = $1
+    AND is_deleted IS NOT TRUE
       AND (expires_at IS NULL OR expires_at > NOW())
     `,
     [roomCode],
@@ -233,6 +235,13 @@ export const deleteExpiredGuestRooms = async () => {
         await pool.query(`DELETE FROM room_files WHERE room_id = $1`, [roomId]);
 
         await pool.query(`DELETE FROM rooms WHERE id = $1`, [roomId]);
+        // Cleanup socket memory
+        roomUsers.delete(roomId);
+        roomText.delete(roomId);
+        roomSettingsCache.delete(roomId);
+        roomTyping.delete(roomId);
+        roomDrawData.delete(roomId);
+        cleanupRoomUsage(roomId);
 
         console.log(`✅ Expired guest room cleaned: ${roomId}`);
       } catch (err) {

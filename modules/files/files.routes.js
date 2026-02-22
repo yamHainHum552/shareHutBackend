@@ -2,7 +2,7 @@ import express from "express";
 import multer from "multer";
 import { v4 as uuid } from "uuid";
 import cloudinary from "../../utils/Cloudinary.js";
-import { authMiddlewareOptional } from "../../middleware/authMiddlewareOptional.js";
+import { authMiddlewareOptional } from "../../middleware/auth.middleware.js";
 import { findRoomById, isRoomMember } from "../rooms/rooms.service.js";
 import { hashGuestToken } from "../../utils/guestToken.js";
 import { createFileRecord, getRoomFiles } from "./files.service.js";

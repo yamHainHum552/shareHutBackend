@@ -13,7 +13,7 @@ import {
 } from "./rooms.service.js";
 import { generateRoomCode } from "../../utils/roomCode.js";
 import { addRoomMember } from "./rooms.service.js";
-import { authMiddlewareOptional } from "../../middleware/authMiddlewareOptional.js";
+import { authMiddlewareOptional } from "../../middleware/auth.middleware.js";
 import { createJoinRequest } from "../requests/requests.service.js";
 import { updateRoomSettingsCache } from "../../socket/index.js";
 import { hashGuestToken } from "../../utils/guestToken.js";
@@ -34,11 +34,9 @@ router.post("/guest", async (req, res) => {
   }
 
   try {
-    let ownerToken = guestOwnerToken;
-    let ownerHash;
-
-    if (ownerToken) {
-      ownerHash = hashGuestToken(ownerToken);
+    // If client provided a token, check if it owns an active room
+    if (guestOwnerToken) {
+      const ownerHash = hashGuestToken(guestOwnerToken);
 
       const { rows } = await pool.query(
         `
@@ -52,18 +50,18 @@ router.post("/guest", async (req, res) => {
       );
 
       if (rows.length > 0) {
-        // 🔥 Reuse existing active room
         return res.status(200).json({
           roomId: rows[0].id,
           roomCode: rows[0].room_code,
           expiresAt: rows[0].expires_at,
-          ownerToken,
+          ownerToken: guestOwnerToken,
         });
       }
     }
 
-    ownerToken = generateGuestOwnerToken();
-    ownerHash = hashGuestToken(ownerToken);
+    // 🔥 ALWAYS generate new token if no valid active room
+    const newOwnerToken = generateGuestOwnerToken();
+    const newOwnerHash = hashGuestToken(newOwnerToken);
 
     const roomId = uuid();
     const roomCode = generateRoomCode();
@@ -81,14 +79,14 @@ router.post("/guest", async (req, res) => {
       )
       VALUES ($1, $2, $3, true, $4, $5)
       `,
-      [roomId, name, roomCode, ownerHash, expiresAt],
+      [roomId, name, roomCode, newOwnerHash, expiresAt],
     );
 
     return res.status(201).json({
       roomId,
       roomCode,
       expiresAt,
-      ownerToken,
+      ownerToken: newOwnerToken,
     });
   } catch (err) {
     console.error("Guest room creation error:", err);
@@ -98,6 +96,7 @@ router.post("/guest", async (req, res) => {
 router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
   try {
     const room = await findRoomById(req.params.roomId);
+
     if (!room) {
       return res.status(404).json({ error: "Room not found" });
     }
@@ -105,36 +104,37 @@ router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
     const isAuthRoom = !!room.owner_id;
     const isGuestRoom = !!room.guest_owner_hash;
 
-    /* ---------------------------------- */
-    /* 🔒 AUTH ROOMS REQUIRE LOGIN       */
-    /* ---------------------------------- */
-    if (isAuthRoom && !req.user) {
-      return res.json({ isMember: false });
-    }
-
-    /* ---------------------------------- */
-    /* 👑 JWT OWNER                       */
-    /* ---------------------------------- */
-    if (req.user && room.owner_id === req.user.id) {
-      return res.json({ isMember: true });
-    }
-
-    /* ---------------------------------- */
-    /* 👤 AUTH USER MEMBER                */
-    /* ---------------------------------- */
-    if (req.user) {
-      const member = await isRoomMember(room.id, req.user.id);
-      if (member) {
-        return res.json({ isMember: true });
-      }
-    }
-
-    /* ---------------------------------- */
-    /* 👑 GUEST OWNER TOKEN               */
-    /* ---------------------------------- */
     const rawHeader = req.headers["x-guest-owner-token"];
     const guestOwnerToken = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+    console.log("---- MEMBERSHIP CHECK ----");
+    console.log("Headers:", req.headers);
+    console.log("Guest header:", req.headers["x-guest-owner-token"]);
+    console.log("User:", req.user);
+    console.log("Room hash:", room.guest_owner_hash);
 
+    /* -------------------------------------------------- */
+    /* 1️⃣ AUTH ROOM (JWT OWNER / MEMBER REQUIRED)        */
+    /* -------------------------------------------------- */
+    if (isAuthRoom) {
+      if (!req.user) {
+        return res.json({ isMember: false });
+      }
+
+      // Owner
+      if (room.owner_id === req.user.id) {
+        return res.json({ isMember: true });
+      }
+
+      // Approved member
+      const member = await isRoomMember(room.id, req.user.id);
+      return res.json({ isMember: !!member });
+    }
+
+    /* -------------------------------------------------- */
+    /* 2️⃣ GUEST ROOM                                    */
+    /* -------------------------------------------------- */
+
+    // 👑 Guest Owner (PRIORITY CHECK)
     if (
       typeof guestOwnerToken === "string" &&
       room.guest_owner_hash &&
@@ -143,10 +143,13 @@ router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
       return res.json({ isMember: true });
     }
 
-    /* ---------------------------------- */
-    /* 👤 Anonymous in Guest Room         */
-    /* ---------------------------------- */
-    if (isGuestRoom && !req.user && room.allow_joins) {
+    // 👤 Auth user inside guest room (allowed only if joins enabled)
+    if (req.user && room.allow_joins) {
+      return res.json({ isMember: true });
+    }
+
+    // 👤 Anonymous guest (allowed only if joins enabled)
+    if (!req.user && room.allow_joins) {
       return res.json({ isMember: true });
     }
 

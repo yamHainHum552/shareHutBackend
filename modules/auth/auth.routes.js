@@ -59,17 +59,20 @@ router.get(
       {
         id: user.id,
         email: user.email,
+        // role: user.role,
       },
       env.JWT_SECRET,
       { expiresIn: "7d" },
     );
 
+    const isProd = env.NODE_ENV === "production";
+
     res.cookie("token", token, {
       httpOnly: true,
-      secure: true,
-      sameSite: "lax",
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      domain: isProd ? ".sharehutlive.com" : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
-      domain: ".sharehutlive.com",
       path: "/",
     });
 
@@ -123,9 +126,8 @@ router.post("/register", async (req, res) => {
 router.post("/logout", (req, res) => {
   res.clearCookie("token", {
     httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    domain: ".sharehutlive.com",
+    secure: env.NODE_ENV === "production",
+    sameSite: env.NODE_ENV === "production" ? "none" : "lax",
     path: "/",
   });
   res.json({ success: true });
@@ -137,6 +139,11 @@ router.post("/login", async (req, res) => {
   const user = await findUserByEmail(email);
   if (!user) {
     return res.status(401).json({ error: "Invalid Credentials" });
+  }
+  if (!user.is_verified) {
+    return res.status(403).json({
+      error: "Please verify your email first",
+    });
   }
 
   if (user.provider === "google") {
@@ -150,15 +157,21 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid Credentials" });
   }
 
-  const token = jwt.sign({ id: user.id, email: user.email }, env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
+  const token = jwt.sign(
+    { id: user.id, email: user.email, role: user.role },
+    env.JWT_SECRET,
+    {
+      expiresIn: "7d",
+    },
+  );
+
+  const isProd = env.NODE_ENV === "production";
 
   res.cookie("token", token, {
     httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    domain: ".sharehutlive.com",
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    domain: isProd ? ".sharehutlive.com" : undefined,
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/",
   });
@@ -175,6 +188,8 @@ router.get("/me", authMiddleware, async (req, res) => {
 
   res.json({
     email: user.email,
+    role: user.role,
+    id: user.id,
     status: "active",
   });
 });
