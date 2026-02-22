@@ -7,14 +7,20 @@ import { deleteExpiredGuestRooms } from "./modules/rooms/rooms.service.js";
 
 const server = http.createServer(app);
 
+const allowedOrigins = [
+  "https://sharehutlive.com",
+  "https://www.sharehutlive.com",
+  "http://localhost:3000",
+];
+
 const io = new Server(server, {
   cors: {
-    origin: env.FRONTEND_URL,
+    origin: allowedOrigins,
     credentials: true,
   },
 });
 
-// Every 5 minutes
+/* Cleanup Job */
 setInterval(
   async () => {
     try {

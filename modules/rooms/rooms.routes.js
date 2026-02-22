@@ -106,11 +106,6 @@ router.get("/:roomId/membership", authMiddlewareOptional, async (req, res) => {
 
     const rawHeader = req.headers["x-guest-owner-token"];
     const guestOwnerToken = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-    console.log("---- MEMBERSHIP CHECK ----");
-    console.log("Headers:", req.headers);
-    console.log("Guest header:", req.headers["x-guest-owner-token"]);
-    console.log("User:", req.user);
-    console.log("Room hash:", room.guest_owner_hash);
 
     /* -------------------------------------------------- */
     /* 1️⃣ AUTH ROOM (JWT OWNER / MEMBER REQUIRED)        */
