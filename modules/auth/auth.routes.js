@@ -71,7 +71,7 @@ router.get(
       httpOnly: true,
       secure: isProd,
       sameSite: isProd ? "none" : "lax",
-      domain: isProd ? ".sharehutlive.com" : undefined,
+      // domain: isProd ? ".sharehutlive.com" : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
       path: "/",
     });

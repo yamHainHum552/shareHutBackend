@@ -108,6 +108,13 @@ const cleanupRoomUsage = (roomId) => {
     }
   }
 };
+export const cleanupSocketRoom = (roomId) => {
+  roomUsers.delete(roomId);
+  roomText.delete(roomId);
+  roomSettingsCache.delete(roomId);
+  roomTyping.delete(roomId);
+  roomDrawData.delete(roomId);
+};
 
 /* -------------------------------------------------------------------------- */
 /*                               Initialize Socket                            */

@@ -1,3 +1,4 @@
+import cloudinary from "../../utils/Cloudinary.js";
 export const cleanupGuestRoomCloudinary = async (roomId) => {
   try {
     // Delete all possible resource types

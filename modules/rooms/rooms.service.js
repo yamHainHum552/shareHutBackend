@@ -9,7 +9,7 @@ import { env } from "../../config/env.js";
 import { validate as uuidValidate } from "uuid";
 import cloudinary from "../../utils/Cloudinary.js";
 import { cleanupGuestRoomCloudinary } from "../files/cleanup.service.js";
-
+import { cleanupSocketRoom } from "../../socket/index.js";
 /**
  * ===========================
  * AUTHENTICATED ROOM CREATION
@@ -236,12 +236,7 @@ export const deleteExpiredGuestRooms = async () => {
 
         await pool.query(`DELETE FROM rooms WHERE id = $1`, [roomId]);
         // Cleanup socket memory
-        roomUsers.delete(roomId);
-        roomText.delete(roomId);
-        roomSettingsCache.delete(roomId);
-        roomTyping.delete(roomId);
-        roomDrawData.delete(roomId);
-        cleanupRoomUsage(roomId);
+        cleanupSocketRoom(roomId);
 
         console.log(`✅ Expired guest room cleaned: ${roomId}`);
       } catch (err) {
