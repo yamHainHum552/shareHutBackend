@@ -1,20 +1,23 @@
 import cloudinary from "../../utils/Cloudinary.js";
 export const cleanupGuestRoomCloudinary = async (roomId) => {
   try {
-    // Delete all possible resource types
-    await cloudinary.api.delete_resources_by_prefix(`sharehut/${roomId}`, {
-      resource_type: "image",
-    });
+    // 1️⃣ Get all files from DB
+    const { rows } = await pool.query(
+      `SELECT public_id, resource_type FROM room_files WHERE room_id = $1`,
+      [roomId],
+    );
 
-    await cloudinary.api.delete_resources_by_prefix(`sharehut/${roomId}`, {
-      resource_type: "raw",
-    });
+    if (!rows.length) return;
 
-    await cloudinary.api.delete_resources_by_prefix(`sharehut/${roomId}`, {
-      resource_type: "video",
-    });
+    // 2️⃣ Delete each file properly using its resource_type
+    for (const file of rows) {
+      await cloudinary.uploader.destroy(file.public_id, {
+        resource_type: file.resource_type,
+        invalidate: true,
+      });
+    }
 
-    // Delete folder after resources
+    // 3️⃣ Delete folder safely
     try {
       await cloudinary.api.delete_folder(`sharehut/${roomId}`);
     } catch (err) {
@@ -22,6 +25,8 @@ export const cleanupGuestRoomCloudinary = async (roomId) => {
         console.error("Folder delete error:", err.message);
       }
     }
+
+    console.log(`✅ Cloudinary cleaned for room ${roomId}`);
   } catch (err) {
     console.error("Cloudinary cleanup failed:", err.message);
   }

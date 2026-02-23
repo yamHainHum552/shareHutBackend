@@ -124,12 +124,16 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/logout", (req, res) => {
+  const isProd = env.NODE_ENV === "production";
+
   res.clearCookie("token", {
     httpOnly: true,
-    secure: env.NODE_ENV === "production",
-    sameSite: env.NODE_ENV === "production" ? "none" : "lax",
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    domain: isProd ? ".sharehutlive.com" : undefined,
     path: "/",
   });
+
   res.json({ success: true });
 });
 

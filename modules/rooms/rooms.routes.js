@@ -65,7 +65,7 @@ router.post("/guest", async (req, res) => {
 
     const roomId = uuid();
     const roomCode = generateRoomCode();
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
     await pool.query(
       `

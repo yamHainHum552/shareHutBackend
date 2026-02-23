@@ -192,6 +192,7 @@ export const findRoomsByOwner = async (ownerId) => {
     SELECT id, name, room_code, created_at
     FROM rooms
     WHERE owner_id = $1
+    AND is_deleted = FALSE
     ORDER BY created_at DESC
     `,
     [ownerId],
