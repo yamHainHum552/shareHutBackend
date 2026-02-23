@@ -250,6 +250,7 @@ export const deleteExpiredGuestRooms = async () => {
     console.error("❌ Expired room cleanup failed:", err.message);
   }
 };
+
 export const removeRoomMember = async (roomId, userId) => {
   await pool.query(
     `
@@ -279,7 +280,11 @@ export const findRoomSettings = async (roomId) => {
 
   return rows[0] || null;
 };
-
+export const getRoomType = (room) => {
+  if (room.owner_id) return "authenticated";
+  if (room.guest_owner_hash) return "guest";
+  return null;
+};
 export const getRoomMemberRole = async (roomId, userId) => {
   const { rows } = await pool.query(
     `

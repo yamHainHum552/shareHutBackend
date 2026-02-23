@@ -183,6 +183,14 @@ router.post("/join", authMiddlewareOptional, async (req, res) => {
         error: "Authentication required to join this room",
       });
     }
+    /* ---------------------------------- */
+    /* 🚫 AUTH USER CANNOT JOIN GUEST ROOM */
+    /* ---------------------------------- */
+    if (isGuestRoom && req.user) {
+      return res.status(403).json({
+        error: "Authenticated users cannot join guest rooms",
+      });
+    }
 
     /* ---------------------------------- */
     /* 👑 OWNER DIRECT ENTRY              */

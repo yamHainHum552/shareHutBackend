@@ -133,7 +133,11 @@ export const initSocket = (serverIo) => {
 
       const guestOwnerToken = socket.handshake.auth?.guestOwnerToken;
       const guestSessionId = socket.handshake.auth?.guestSessionId;
-      const guestName = socket.handshake.auth?.guestName || "Guest";
+      const providedName = socket.handshake.auth?.guestName;
+
+      const fallbackName = `Guest-${guestSessionId?.slice(0, 4) || Math.floor(Math.random() * 1000)}`;
+
+      const guestName = providedName?.trim() || fallbackName;
 
       /* -------------------------------------------------- */
       /* 1️⃣ Authenticated User (JWT)                       */
@@ -173,11 +177,19 @@ export const initSocket = (serverIo) => {
       if (guestOwnerToken) {
         const hashed = hashGuestToken(guestOwnerToken);
 
+        const shortId = guestSessionId.slice(0, 4);
+
+        const adjectives = ["Blue", "Swift", "Silent", "Brave"];
+        const animals = ["Tiger", "Falcon", "Wolf", "Eagle"];
+
+        const randomName =
+          adjectives[Math.floor(Math.random() * adjectives.length)] +
+          animals[Math.floor(Math.random() * animals.length)];
+
         socket.user = {
-          type: "guest-owner",
-          id: hashed, // 🔥 Use hashed value as stable ID
-          guestOwnerToken, // keep raw for potential comparisons
-          name: "Room Owner (Guest)",
+          type: "guest",
+          id: guestSessionId,
+          name: providedName || `${randomName}-${shortId}`,
         };
 
         return next();
@@ -186,11 +198,23 @@ export const initSocket = (serverIo) => {
       /* -------------------------------------------------- */
       /* 3️⃣ Regular Guest                                  */
       /* -------------------------------------------------- */
+      /* -------------------------------------------------- */
+      /* 3️⃣ Regular Guest                                  */
+      /* -------------------------------------------------- */
       if (guestSessionId) {
+        const providedName = socket.handshake.auth?.guestName?.trim();
+
+        const adjectives = ["Blue", "Swift", "Silent", "Brave"];
+        const animals = ["Tiger", "Falcon", "Wolf", "Eagle"];
+
+        const randomName =
+          adjectives[Math.floor(Math.random() * adjectives.length)] +
+          animals[Math.floor(Math.random() * animals.length)];
+
         socket.user = {
           type: "guest",
           id: guestSessionId,
-          name: guestName,
+          name: providedName || randomName,
         };
 
         return next();
@@ -247,94 +271,148 @@ export const initSocket = (serverIo) => {
     // ... inside io.on("connection") ...
 
     socket.on("join-room", async ({ roomId }) => {
-      if (!socketRateLimit(socket, "join", 3, 10000)) return;
+      try {
+        if (!socketRateLimit(socket, "join", 3, 10000)) return;
 
-      const room = await findRoomById(roomId);
-      if (!room) {
-        socket.emit("join-denied", { reason: "Room not found" });
-        return;
-      }
-
-      // 1. Settings Cache Logic
-      let settings = roomSettingsCache.get(roomId);
-      if (!settings) {
-        settings = {
-          ownerId: room.owner_id,
-          guestOwnerHash: room.guest_owner_hash,
-          isReadOnly: room.is_read_only,
-          allowJoins: room.allow_joins,
-        };
-        roomSettingsCache.set(roomId, settings);
-      }
-
-      // 2. Authorization
-      const isOwner =
-        (socket.user.type === "user" && settings.ownerId === socket.user.id) ||
-        (socket.user.type === "guest-owner" &&
-          settings.guestOwnerHash === socket.user.id);
-
-      if (!isOwner) {
-        if (!settings.allowJoins) {
-          socket.emit("join-denied", { reason: "Room is locked" });
+        const room = await findRoomById(roomId);
+        if (!room) {
+          socket.emit("join-denied", { reason: "Room not found" });
           return;
         }
-        if (socket.user.type === "user") {
-          const allowed = await isRoomMember(roomId, socket.user.id);
-          if (!allowed) {
-            socket.emit("approval-required");
+
+        /* ---------------------------------- */
+        /* 1️⃣ Load / Cache Settings           */
+        /* ---------------------------------- */
+        let settings = roomSettingsCache.get(roomId);
+        if (!settings) {
+          settings = {
+            ownerId: room.owner_id,
+            guestOwnerHash: room.guest_owner_hash,
+            isReadOnly: room.is_read_only,
+            allowJoins: room.allow_joins,
+          };
+          roomSettingsCache.set(roomId, settings);
+        }
+
+        const isAuthRoom = !!settings.ownerId;
+        const isGuestRoom = !!settings.guestOwnerHash;
+
+        const isAuthUser = socket.user?.type === "user";
+        const isGuestUser =
+          socket.user?.type === "guest" || socket.user?.type === "guest-owner";
+
+        /* ---------------------------------- */
+        /* 🔒 2️⃣ STRICT ROOM TYPE ENFORCEMENT */
+        /* ---------------------------------- */
+
+        // Guest cannot join authenticated room
+        if (isAuthRoom && !isAuthUser) {
+          socket.emit("join-denied", {
+            reason: "Guests cannot join authenticated rooms",
+          });
+          return;
+        }
+
+        // Authenticated user cannot join guest room
+        if (isGuestRoom && isAuthUser) {
+          socket.emit("join-denied", {
+            reason: "Authenticated users cannot join guest rooms",
+          });
+          return;
+        }
+
+        /* ---------------------------------- */
+        /* 👑 3️⃣ OWNER DIRECT ENTRY           */
+        /* ---------------------------------- */
+
+        const isOwner =
+          (isAuthUser && settings.ownerId === socket.user.id) ||
+          (socket.user.type === "guest-owner" &&
+            settings.guestOwnerHash === socket.user.id);
+
+        if (!isOwner) {
+          if (!settings.allowJoins) {
+            socket.emit("join-denied", { reason: "Room is locked" });
             return;
           }
+
+          // Authenticated users require membership
+          if (isAuthUser) {
+            const allowed = await isRoomMember(roomId, socket.user.id);
+            if (!allowed) {
+              socket.emit("approval-required");
+              return;
+            }
+          }
         }
-      }
 
-      // 3. State Management
-      socket.join(roomId);
-      socket.currentRoom = roomId;
-      socket.isRoomMember = true;
+        /* ---------------------------------- */
+        /* 4️⃣ Join Room                      */
+        /* ---------------------------------- */
 
-      if (!roomUsers.has(roomId)) {
-        roomUsers.set(roomId, new Map());
-      }
+        socket.join(roomId);
+        socket.currentRoom = roomId;
+        socket.isRoomMember = true;
 
-      const usersMap = roomUsers.get(roomId);
-      const userKey = getUserKey(socket);
+        if (!roomUsers.has(roomId)) {
+          roomUsers.set(roomId, new Map());
+        }
 
-      // 4. Participant Registration
-      if (!usersMap.has(userKey)) {
-        let userData;
-        if (socket.user.type === "user") {
-          const dbUser = await getUserInfo(socket.user.id);
-          userData = {
-            id: socket.user.id,
-            name: dbUser?.name || "Member",
-            type: "user",
-          };
+        const usersMap = roomUsers.get(roomId);
+        const userKey = getUserKey(socket);
+
+        /* ---------------------------------- */
+        /* 5️⃣ Register Participant           */
+        /* ---------------------------------- */
+
+        if (!usersMap.has(userKey)) {
+          let userData;
+
+          if (isAuthUser) {
+            const dbUser = await getUserInfo(socket.user.id);
+            userData = {
+              id: socket.user.id,
+              name: dbUser?.name || "Member",
+              type: "user",
+            };
+          } else {
+            userData = {
+              id: userKey,
+              name: socket.user.name || "Guest",
+              type: socket.user.type,
+            };
+          }
+
+          usersMap.set(userKey, {
+            userData,
+            sockets: new Set([socket.id]),
+          });
         } else {
-          // Use userKey (type:id) as the unique ID for the frontend list
-          userData = {
-            id: userKey,
-            name: socket.user.name || "Guest",
-            type: socket.user.type,
-          };
+          usersMap.get(userKey).sockets.add(socket.id);
         }
-        usersMap.set(userKey, { userData, sockets: new Set([socket.id]) });
-      } else {
-        // Re-attach to existing user entry (handles multi-tab and refresh)
-        usersMap.get(userKey).sockets.add(socket.id);
+
+        /* ---------------------------------- */
+        /* 6️⃣ Sync Room State                */
+        /* ---------------------------------- */
+
+        emitUserList(roomId);
+
+        if (roomText.has(roomId)) {
+          socket.emit("text-update", roomText.get(roomId));
+        }
+
+        if (roomDrawData.has(roomId)) {
+          socket.emit("draw-sync", roomDrawData.get(roomId));
+        }
+
+        socket.emit("room-settings-updated", {
+          isReadOnly: settings.isReadOnly,
+          allowJoins: settings.allowJoins,
+        });
+      } catch (err) {
+        console.error("join-room error:", err);
+        socket.emit("join-denied", { reason: "Internal server error" });
       }
-
-      // 5. Final Sync
-      emitUserList(roomId);
-
-      if (roomText.has(roomId))
-        socket.emit("text-update", roomText.get(roomId));
-      if (roomDrawData.has(roomId))
-        socket.emit("draw-sync", roomDrawData.get(roomId));
-
-      socket.emit("room-settings-updated", {
-        isReadOnly: settings.isReadOnly,
-        allowJoins: settings.allowJoins,
-      });
     });
     socket.on("typing-start", ({ roomId }) => {
       if (!socket.isRoomMember) return;
