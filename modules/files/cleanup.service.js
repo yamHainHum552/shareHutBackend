@@ -1,4 +1,5 @@
 import cloudinary from "../../utils/Cloudinary.js";
+import { pool } from "../../config/db.js";
 export const cleanupGuestRoomCloudinary = async (roomId) => {
   try {
     // 1️⃣ Get all files from DB
